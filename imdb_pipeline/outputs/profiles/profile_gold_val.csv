@@ -1,0 +1,14 @@
+split,column,n_rows,n_missing,pct_missing,n_unique,dtype
+gold_val,tconst,955,0,0.0,955,object
+gold_val,primaryTitle,955,0,0.0,955,object
+gold_val,originalTitle,955,468,49.01,487,object
+gold_val,startYear,955,0,0.0,98,Float64
+gold_val,endYear,955,955,100.0,0,Float64
+gold_val,runtimeMinutes,955,2,0.21,123,Float64
+gold_val,numVotes,955,91,9.53,819,Float64
+gold_val,n_directors,955,0,0.0,7,int64
+gold_val,n_writers,955,0,0.0,11,int64
+gold_val,log_numVotes,955,91,9.53,819,float64
+gold_val,len_primaryTitle,955,0,0.0,49,int64
+gold_val,has_endYear,955,0,0.0,1,int64
+gold_val,decade,955,0,0.0,12,Int64
