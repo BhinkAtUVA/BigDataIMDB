@@ -266,7 +266,7 @@ def gold_features(df: pd.DataFrame, agg: pd.DataFrame,
     # Derived features
     df["log_numVotes"]     = np.log1p(df["numVotes"].astype(float))
     df["len_primaryTitle"] = df["primaryTitle"].str.len().fillna(0).astype(int)
-    df["has_endYear"]      = df["endYear"].notna().astype(int)
+    df["has_endYear"]      = df["endYear"].notna().astype(int) if "endYear" in df.columns else 0
     df["decade"]           = (df["startYear"].astype(float) // 10 * 10).astype("Int64")
 
     return df
@@ -329,15 +329,13 @@ def build(raw_dir: Path = RAW,
 
     print("\n── SILVER: Cleaning ──────────────────────────────────────────")
     silver_train = silver_clean(bronze_train, has_label=True)
-    silver_val   = silver_clean(bronze_val,   has_label=True)
+    silver_val   = silver_clean(bronze_val,   has_label=True)   # val has label
     silver_test  = silver_clean(bronze_test,  has_label=False)
 
     print("\n── Cleaning Hooks (EDA injections) ───────────────────────────")
     silver_train = apply_cleaning_hooks(silver_train, "train")
     silver_val   = apply_cleaning_hooks(silver_val,   "val")
     silver_test  = apply_cleaning_hooks(silver_test,  "test")
-
-    print("\n── Quality Gates (Silver) ────────────────────────────────────")
 
     print("\n── Quality Gates (Silver) ────────────────────────────────────")
     run_all_gates(silver_train, "train")

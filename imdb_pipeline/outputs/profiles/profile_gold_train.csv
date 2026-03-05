@@ -3,14 +3,14 @@ gold_train,tconst,7959,0,0.0,7959,object
 gold_train,primaryTitle,7959,0,0.0,7816,object
 gold_train,originalTitle,7959,3988,50.11,3944,object
 gold_train,startYear,7959,0,0.0,104,Float64
-gold_train,endYear,7959,7959,100.0,0,Float64
 gold_train,runtimeMinutes,7959,13,0.16,185,Float64
-gold_train,numVotes,7959,790,9.93,5118,Float64
+gold_train,numVotes,7959,0,0.0,5118,Float64
 gold_train,label,7959,0,0.0,2,Int8
 gold_train,_source_file,7959,0,0.0,8,object
+gold_train,is_long_film,7959,0,0.0,1,Int8
 gold_train,n_directors,7959,0,0.0,16,int64
 gold_train,n_writers,7959,0,0.0,20,int64
-gold_train,log_numVotes,7959,790,9.93,5118,float64
+gold_train,log_numVotes,7959,0,0.0,5118,float64
 gold_train,len_primaryTitle,7959,0,0.0,70,int64
 gold_train,has_endYear,7959,0,0.0,1,int64
 gold_train,decade,7959,0,0.0,12,Int64
