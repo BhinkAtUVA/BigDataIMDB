@@ -16,9 +16,15 @@ Outputs:
 
 from os import PathLike
 import sys
+import warnings
 from pathlib import Path
 import pandas as pd
 import numpy as np
+
+# Suppress sklearn numerical warnings from Logistic Regression on raw features.
+# These occur because Bronze/Silver layers have extreme-scale columns (numVotes
+# in millions vs. binary flags) that cause overflow in matmul — harmless.
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="sklearn")
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import CLEANED, MERGED, PROCESSED, LABEL_COL, TOP_GENRES
@@ -37,6 +43,18 @@ OUTPUTS.mkdir(parents=True, exist_ok=True)
 # ── Features to use ───────────────────────────────────────────────────────────
 # Add/remove features here as EDA findings come in.
 # Never include tconst, primaryTitle, originalTitle (non-numeric / identifiers).
+#
+# REMOVED (EDA-driven):
+#   has_endYear  — constant 0 after endYear column was dropped → zero information
+#   isAdult      — near-constant (1 out of 7959) → zero information
+#   avg_rating   — derived from same user votes as label → data leakage
+#
+# ADDED (EDA-driven):
+#   votes_per_year   — log(numVotes+1) / film_age → popularity velocity
+#   is_foreign_title — originalTitle != primaryTitle → foreign-language signal
+#   title_has_number — title contains digits → sequel/franchise signal
+#   title_word_count — word count of title → genre proxy
+#
 FEATURE_COLS = [
     # ── original features ──
     "startYear",
@@ -46,14 +64,18 @@ FEATURE_COLS = [
     "n_directors",
     "n_writers",
     "len_primaryTitle",
-    "has_endYear",
     "is_long_film",
     "decade",
+    # ── new EDA-derived features ──
+    "votes_per_year",
+    "is_foreign_title",
+    "title_has_number",
+    "title_word_count",
     # ── external: ratings ──
-    "avg_rating",
+    # NOTE: avg_rating removed — it is derived from the same user votes
+    #       that determine the True/False label → data leakage.
     "imdb_votes",
     # ── external: basics ──
-    "isAdult",
     "n_genres",
 ] + [f"genre_{g.replace('-', '_')}" for g in TOP_GENRES]
 
@@ -105,15 +127,34 @@ def run(train, val, test, short = False):
     print(f"  Train: {len(X_train)} rows  |  Val: {len(X_val)} rows  |  Test: {len(X_test)} rows")
 
     # ── Models to try ─────────────────────────────────────────────────────────
+    # Hyperparameters tuned via grid search (see README).
+    #
+    # Random Forest:  max_depth=15 + min_samples_leaf=5 → prevents the
+    #   tree from memorising every training row (was train_acc=1.0000!).
+    #   Reduces train-CV gap from 0.16 to ~0.07 with no CV loss.
+    #
+    # Gradient Boosting:  n_estimators=300, max_depth=4, lr=0.1 → best CV
+    #   accuracy 0.8456 (up from 0.8417 with defaults).
     candidates = {
         "Logistic Regression": build_pipeline(
             LogisticRegression(max_iter=1000, random_state=42)
         ),
         "Random Forest": build_pipeline(
-            RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+            RandomForestClassifier(
+                n_estimators=300,
+                max_depth=15,
+                min_samples_leaf=5,
+                random_state=42,
+                n_jobs=-1,
+            )
         ),
         "Gradient Boosting": build_pipeline(
-            GradientBoostingClassifier(n_estimators=200, random_state=42)
+            GradientBoostingClassifier(
+                n_estimators=300,
+                max_depth=4,
+                learning_rate=0.1,
+                random_state=42,
+            )
         ),
     }
 

@@ -32,6 +32,11 @@ RUNTIME_MIN         = 1      # minutes
 RUNTIME_MAX         = 600
 NUMVOTES_MIN        = 0
 
+# ── Outlier-capping thresholds (EDA-driven) ──────────────────────────────────
+RUNTIME_CAP         = 300    # cap runtimeMinutes at 300 (99th-pctl ≈ 200)
+N_DIRECTORS_CAP     = 5      # anthology films can have 35; cap at 5
+N_WRITERS_CAP       = 10     # cap extreme writer counts
+
 # ── NULL sentinel values found in the data ───────────────────────────────────
 NULL_SENTINELS = {"\\N", "\\\\N", "NA", "N/A", "None", "none", "null", "NULL", "", " "}
 
