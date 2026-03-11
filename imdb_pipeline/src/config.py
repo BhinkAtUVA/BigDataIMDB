@@ -3,8 +3,11 @@ from pathlib import Path
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT        = Path(__file__).resolve().parent.parent
 RAW         = ROOT / "data" / "raw"
+MERGED      = ROOT / "data" / "merged"
+CLEANED     = ROOT / "data" / "cleaned"
 PROCESSED   = ROOT / "data" / "processed"
 PROFILES    = ROOT / "outputs" / "profiles"
+PLOTS       = ROOT / "outputs" / "plots"
 
 TRAIN_GLOB       = "train-*.csv"
 VAL_FILE         = "validation_hidden.csv"

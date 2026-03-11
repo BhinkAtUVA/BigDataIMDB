@@ -42,7 +42,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
-    RAW, PROCESSED, PROFILES,
+    CLEANED, MERGED, RAW, PROCESSED, PROFILES,
     TRAIN_GLOB, VAL_FILE, TEST_FILE,
     DIRECTING_FILE, WRITING_FILE,
     REQUIRED_COLS, LABEL_COL,
@@ -66,7 +66,7 @@ def bronze_ingest(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> None:
       - read_csv_auto: infers types, handles inconsistent schemas
       - union_by_name=true: aligns files on column name, not position
         → train-6.csv has runtimeMinutes as int64, others as string: handled automatically
-      - ignore_errors=true: malformed rows become NULL instead of crashes
+      - ignore_errors=false: malformed rows should lead to a crash to attract attention
 
     Equivalent pandas approach would require manual dtype reconciliation
     across 8 files with schema drift — DuckDB does this in one line.
@@ -97,7 +97,7 @@ def bronze_ingest(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> None:
         FROM read_csv_auto(
             '{train_glob}',
             union_by_name = true,
-            ignore_errors = true
+            ignore_errors = false
         )
     """)
     n_train = con.execute("SELECT COUNT(*) FROM bronze_train").fetchone()[0]
@@ -298,9 +298,13 @@ def profile_dataframe(df: pd.DataFrame, name: str, out_dir: Path) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build(raw_dir: Path = RAW,
+          merged_dir: Path = MERGED,
+          cleaned_dir: Path = CLEANED,
           processed_dir: Path = PROCESSED,
           profiles_dir: Path = PROFILES) -> None:
 
+    merged_dir.mkdir(parents=True, exist_ok=True)
+    cleaned_dir.mkdir(parents=True, exist_ok=True)
     processed_dir.mkdir(parents=True, exist_ok=True)
     profiles_dir.mkdir(parents=True, exist_ok=True)
 
@@ -311,6 +315,10 @@ def build(raw_dir: Path = RAW,
     bronze_train_df = bronze_to_pandas(con, "bronze_train")
     bronze_val_df   = bronze_to_pandas(con, "bronze_val")
     bronze_test_df  = bronze_to_pandas(con, "bronze_test")
+
+    bronze_train_df.to_csv(merged_dir / "train_features.csv", index=False)
+    bronze_val_df.to_csv(  merged_dir / "val_features.csv",   index=False)
+    bronze_test_df.to_csv( merged_dir / "test_features.csv",  index=False)
 
     print("\n── JSON Relations ────────────────────────────────────────────")
     directing_df = load_directing(raw_dir / DIRECTING_FILE)
@@ -333,6 +341,10 @@ def build(raw_dir: Path = RAW,
     run_all_gates(silver_val,   "val")
     run_all_gates(silver_test,  "test")
 
+    silver_train.to_csv(cleaned_dir / "train_features.csv", index=False)
+    silver_val.to_csv(  cleaned_dir / "val_features.csv",   index=False)
+    silver_test.to_csv( cleaned_dir / "test_features.csv",  index=False)
+
     print("\n── GOLD: Features + Joins (DuckDB) ───────────────────────────")
     gold_train, gold_val, gold_test = gold_build(
         con, silver_train, silver_val, silver_test,
@@ -340,7 +352,13 @@ def build(raw_dir: Path = RAW,
     )
 
     print("\n── Profiles ──────────────────────────────────────────────────")
-    for df, name in [(gold_train, "gold_train"),
+    for df, name in [(bronze_train_df, "bronze_train"),
+                     (bronze_val_df,   "bronze_val"),
+                     (bronze_test_df,  "bronze_test"),
+                     (silver_train, "silver_train"),
+                     (silver_val,   "silver_val"),
+                     (silver_test,  "silver_test"),
+                     (gold_train, "gold_train"),
                      (gold_val,   "gold_val"),
                      (gold_test,  "gold_test")]:
         profile_dataframe(df, name, profiles_dir)

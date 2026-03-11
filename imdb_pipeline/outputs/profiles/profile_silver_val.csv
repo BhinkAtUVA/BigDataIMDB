@@ -1,0 +1,8 @@
+split,column,n_rows,n_missing,pct_missing,n_unique,dtype
+silver_val,tconst,955,0,0.0,955,object
+silver_val,primaryTitle,955,0,0.0,955,object
+silver_val,originalTitle,955,468,49.01,487,object
+silver_val,startYear,955,0,0.0,98,Float64
+silver_val,runtimeMinutes,955,2,0.21,123,Float64
+silver_val,numVotes,955,0,0.0,820,Float64
+silver_val,is_long_film,955,0,0.0,1,Int8
