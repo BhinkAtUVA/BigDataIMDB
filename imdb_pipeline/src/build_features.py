@@ -42,12 +42,14 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
-    CLEANED, MERGED, RAW, PROCESSED, PROFILES,
+    CLEANED, MERGED, RAW, PROCESSED, PROFILES, EXTERNAL,
     TRAIN_GLOB, VAL_FILE, TEST_FILE,
     DIRECTING_FILE, WRITING_FILE,
+    BASICS_FILE, RATINGS_FILE,
     REQUIRED_COLS, LABEL_COL,
-    NULL_SENTINELS,
+    NULL_SENTINELS, TOP_GENRES,
     RUNTIME_MIN, RUNTIME_MAX, NUMVOTES_MIN, YEAR_MIN, YEAR_MAX,
+    N_DIRECTORS_CAP, N_WRITERS_CAP,
 )
 from json_to_relations import load_directing, load_writing
 from quality_gates import run_all_gates
@@ -201,6 +203,72 @@ def silver_clean(df: pd.DataFrame, has_label: bool) -> pd.DataFrame:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# EXTERNAL — IMDB public datasets (datasets.imdbws.com)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_external(con: duckdb.DuckDBPyConnection,
+                  external_dir: Path) -> None:
+    """
+    Load IMDB public datasets into DuckDB views.
+
+    title.basics.tsv  → genres (multi-label, comma-separated), titleType, isAdult
+    title.ratings.tsv → averageRating, numVotes (the public IMDB rating)
+
+    These are ~11M rows but we only LEFT JOIN on our ~10K tconsts,
+    so the join is cheap. DuckDB handles the TSV scan + filter efficiently.
+    """
+    basics_path  = str(external_dir / BASICS_FILE)
+    ratings_path = str(external_dir / RATINGS_FILE)
+
+    # title.basics — read only needed columns, treat \N as NULL
+    con.execute(f"""
+        CREATE OR REPLACE VIEW ext_basics AS
+        SELECT
+            tconst,
+            CASE WHEN genres = '\\N' THEN NULL ELSE genres END AS genres,
+            CASE WHEN titleType = '\\N' THEN NULL ELSE titleType END AS titleType,
+            CASE WHEN isAdult = '\\N' THEN NULL
+                 ELSE CAST(isAdult AS INTEGER) END AS isAdult
+        FROM read_csv_auto(
+            '{basics_path}',
+            delim = '\t',
+            header = true,
+            nullstr = '\\N',
+            columns = {{
+                'tconst': 'VARCHAR',
+                'titleType': 'VARCHAR',
+                'primaryTitle': 'VARCHAR',
+                'originalTitle': 'VARCHAR',
+                'isAdult': 'VARCHAR',
+                'startYear': 'VARCHAR',
+                'endYear': 'VARCHAR',
+                'runtimeMinutes': 'VARCHAR',
+                'genres': 'VARCHAR'
+            }}
+        )
+    """)
+    n_basics = con.execute("SELECT COUNT(*) FROM ext_basics").fetchone()[0]
+    print(f"  ext_basics:  {n_basics:,} rows")
+
+    # title.ratings — averageRating + numVotes
+    con.execute(f"""
+        CREATE OR REPLACE VIEW ext_ratings AS
+        SELECT
+            tconst,
+            CAST(averageRating AS DOUBLE) AS avg_rating,
+            CAST(numVotes AS BIGINT)      AS imdb_votes
+        FROM read_csv_auto(
+            '{ratings_path}',
+            delim = '\t',
+            header = true,
+            nullstr = '\\N'
+        )
+    """)
+    n_ratings = con.execute("SELECT COUNT(*) FROM ext_ratings").fetchone()[0]
+    print(f"  ext_ratings: {n_ratings:,} rows")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GOLD — DuckDB joins + aggregations
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -218,7 +286,23 @@ def gold_build(con: duckdb.DuckDBPyConnection,
       - Hash-join optimiser is faster than pandas merge at scale
       - Adding new aggregations is one SQL line
       - Logic is transparent and auditable for the poster diagram
+
+    External data enrichment:
+      - ext_ratings  → avg_rating (IMDB public average), imdb_votes
+      - ext_basics   → isAdult, n_genres, genre_* one-hot flags
+
+    IMPORTANT: DuckDB JOINs do not preserve row order. We add an explicit
+    _row_order column before the join and sort by it afterward to ensure
+    predictions align with the original val/test file row order.
     """
+    # ── Preserve original row order across all splits ─────────────────────────
+    silver_train = silver_train.copy()
+    silver_val   = silver_val.copy()
+    silver_test  = silver_test.copy()
+    silver_train["_row_order"] = range(len(silver_train))
+    silver_val["_row_order"]   = range(len(silver_val))
+    silver_test["_row_order"]  = range(len(silver_test))
+
     con.register("silver_train_df", silver_train)
     con.register("silver_val_df",   silver_val)
     con.register("silver_test_df",  silver_test)
@@ -241,31 +325,78 @@ def gold_build(con: duckdb.DuckDBPyConnection,
     print(f"  agg_directors: {con.execute('SELECT COUNT(*) FROM agg_directors').fetchone()[0]} movies")
     print(f"  agg_writers:   {con.execute('SELECT COUNT(*) FROM agg_writers').fetchone()[0]} movies")
 
+    # ── Genre one-hot columns via SQL ─────────────────────────────────────────
+    # ext_basics.genres is comma-separated, e.g. "Drama,Romance,Thriller"
+    # We CASE WHEN contains(genres, 'Drama') to create boolean flags per genre.
+    genre_cols_sql = ",\n                ".join(
+        f"CASE WHEN b.genres IS NOT NULL AND contains(b.genres, '{g}') "
+        f"THEN 1 ELSE 0 END AS genre_{g.replace('-', '_')}"
+        for g in TOP_GENRES
+    )
+
     def gold_sql(source: str, include_label: bool) -> str:
         label_col = f", CAST(m.{LABEL_COL} AS INTEGER) AS {LABEL_COL}" if include_label else ""
         return f"""
             SELECT
+                m._row_order,
                 m.tconst,
                 m.primaryTitle,
-                m.originalTitle,
                 CAST(m.startYear AS DOUBLE)             AS startYear,
                 CAST(m.runtimeMinutes AS DOUBLE)        AS runtimeMinutes,
                 CAST(m.numVotes AS DOUBLE)              AS numVotes
                 {label_col},
-                COALESCE(d.n_directors, 0)              AS n_directors,
-                COALESCE(w.n_writers,   0)              AS n_writers,
+                -- ── crew (capped to reduce outlier influence) ──
+                LEAST(COALESCE(d.n_directors, 0), {N_DIRECTORS_CAP})
+                                                        AS n_directors,
+                LEAST(COALESCE(w.n_writers,   0), {N_WRITERS_CAP})
+                                                        AS n_writers,
+                -- ── derived numerics ──
                 LN(CAST(m.numVotes AS DOUBLE) + 1)      AS log_numVotes,
                 LENGTH(m.primaryTitle)                  AS len_primaryTitle,
-                0                                       AS has_endYear,
-                FLOOR(CAST(m.startYear AS DOUBLE) / 10) * 10 AS decade
+                FLOOR(CAST(m.startYear AS DOUBLE) / 10) * 10 AS decade,
+                -- ── votes normalised by film age (popularity velocity) ──
+                CASE WHEN CAST(m.startYear AS DOUBLE) IS NOT NULL
+                          AND CAST(m.startYear AS DOUBLE) < 2026
+                     THEN LN(CAST(m.numVotes AS DOUBLE) + 1)
+                          / GREATEST(2026 - CAST(m.startYear AS DOUBLE), 1)
+                     ELSE 0.0
+                END                                     AS votes_per_year,
+                -- ── Silver-created features (pass through) ──
+                COALESCE(CAST(m.is_long_film AS INTEGER), 0)
+                                                        AS is_long_film,
+                COALESCE(CAST(m.is_foreign_title AS INTEGER), 0)
+                                                        AS is_foreign_title,
+                COALESCE(CAST(m.title_has_number AS INTEGER), 0)
+                                                        AS title_has_number,
+                COALESCE(CAST(m.title_word_count AS INTEGER), 0)
+                                                        AS title_word_count,
+                -- ── external: ratings ──
+                COALESCE(r.avg_rating, 0.0)             AS avg_rating,
+                COALESCE(r.imdb_votes, 0)               AS imdb_votes,
+                -- ── external: basics ──
+                -- number of genres listed
+                CASE WHEN b.genres IS NULL THEN 0
+                     ELSE LENGTH(b.genres)
+                          - LENGTH(REPLACE(b.genres, ',', ''))
+                          + 1
+                END                                     AS n_genres,
+                -- ── genre one-hot flags ──
+                {genre_cols_sql}
             FROM {source} m
             LEFT JOIN agg_directors d USING (tconst)
             LEFT JOIN agg_writers   w USING (tconst)
+            LEFT JOIN ext_ratings   r USING (tconst)
+            LEFT JOIN ext_basics    b USING (tconst)
         """
 
     gold_train = con.execute(gold_sql("silver_train_df", include_label=True)).df()
     gold_val   = con.execute(gold_sql("silver_val_df",   include_label=False)).df()
     gold_test  = con.execute(gold_sql("silver_test_df",  include_label=False)).df()
+
+    # ── Restore original row order (DuckDB JOINs scramble it) ─────────────────
+    gold_train = gold_train.sort_values("_row_order").drop(columns=["_row_order"]).reset_index(drop=True)
+    gold_val   = gold_val.sort_values("_row_order").drop(columns=["_row_order"]).reset_index(drop=True)
+    gold_test  = gold_test.sort_values("_row_order").drop(columns=["_row_order"]).reset_index(drop=True)
 
     return gold_train, gold_val, gold_test
 
@@ -325,6 +456,9 @@ def build(raw_dir: Path = RAW,
     writing_df   = load_writing(raw_dir   / WRITING_FILE)
     print(f"  directing: {len(directing_df)} rows, {directing_df['tconst'].nunique()} movies")
     print(f"  writing:   {len(writing_df)} rows, {writing_df['tconst'].nunique()} movies")
+
+    print("\n── EXTERNAL: IMDB public data (DuckDB) ───────────────────────")
+    load_external(con, EXTERNAL)
 
     print("\n── SILVER: Cleaning (pandas) ─────────────────────────────────")
     silver_train = silver_clean(bronze_train_df, has_label=True)
