@@ -21,7 +21,7 @@ import pandas as pd
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from config import CLEANED, MERGED, PROCESSED, LABEL_COL
+from config import CLEANED, MERGED, PROCESSED, LABEL_COL, TOP_GENRES
 
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
@@ -38,6 +38,7 @@ OUTPUTS.mkdir(parents=True, exist_ok=True)
 # Add/remove features here as EDA findings come in.
 # Never include tconst, primaryTitle, originalTitle (non-numeric / identifiers).
 FEATURE_COLS = [
+    # ── original features ──
     "startYear",
     "runtimeMinutes",
     "numVotes",
@@ -48,7 +49,13 @@ FEATURE_COLS = [
     "has_endYear",
     "is_long_film",
     "decade",
-]
+    # ── external: ratings ──
+    "avg_rating",
+    "imdb_votes",
+    # ── external: basics ──
+    "isAdult",
+    "n_genres",
+] + [f"genre_{g.replace('-', '_')}" for g in TOP_GENRES]
 
 
 def load_data(stage: PathLike = PROCESSED):

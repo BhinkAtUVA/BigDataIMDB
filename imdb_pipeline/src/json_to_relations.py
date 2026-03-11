@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 json_to_relations.py
 ────────────────────
