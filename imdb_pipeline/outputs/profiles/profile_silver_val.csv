@@ -3,6 +3,12 @@ silver_val,tconst,955,0,0.0,955,object
 silver_val,primaryTitle,955,0,0.0,955,object
 silver_val,originalTitle,955,468,49.01,487,object
 silver_val,startYear,955,0,0.0,98,Float64
-silver_val,runtimeMinutes,955,2,0.21,123,Float64
+silver_val,runtimeMinutes,955,0,0.0,123,Float64
 silver_val,numVotes,955,0,0.0,820,Float64
-silver_val,is_long_film,955,0,0.0,1,Int8
+silver_val,_row_id,955,0,0.0,955,int64
+silver_val,is_long_film,955,2,0.21,1,Int8
+silver_val,is_old_film,955,0,0.0,2,Int8
+silver_val,is_blockbuster,955,0,0.0,2,Int8
+silver_val,is_foreign_title,955,0,0.0,2,Int8
+silver_val,title_word_count,955,0,0.0,10,Int16
+silver_val,title_has_number,955,0,0.0,2,Int8

@@ -5,8 +5,8 @@ Main pipeline: Bronze → Silver → Gold → CSV outputs
 
   Bronze : DuckDB — raw ingestion, union by name, sentinel→NULL
   Silver : pandas — type casting, accent normalisation, year-swap fix
-  Hooks  : pandas — EDA team cleaning functions
-  Gates  : pandas — validation checks
+  Hooks  : pandas — EDA team cleaning functions (cleaning_hooks.py)
+  Gates  : pandas — validation checks (quality_gates.py)
   Gold   : DuckDB — joins, aggregations, feature computation
 
 WHY THIS SPLIT:
@@ -25,10 +25,10 @@ Run:
     python src/build_features.py
 
 Outputs:
-    data/processed/train_features.csv
-    data/processed/val_features.csv
-    data/processed/test_features.csv
-    outputs/profiles/profile_*.csv
+    data/merged/    → raw bronze CSVs (post-ingestion, pre-cleaning)
+    data/cleaned/   → silver CSVs (post-cleaning, pre-gold joins)
+    data/processed/ → gold CSVs (final features for model)
+    outputs/profiles/profile_*.csv  → quality report per stage per split
 """
 
 import unicodedata
@@ -65,11 +65,15 @@ def bronze_ingest(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> None:
     Key DuckDB features used:
       - read_csv_auto: infers types, handles inconsistent schemas
       - union_by_name=true: aligns files on column name, not position
-        → train-6.csv has runtimeMinutes as int64, others as string: handled automatically
-      - ignore_errors=false: malformed rows should lead to a crash to attract attention
+        → train-6.csv has runtimeMinutes as int64, others as string:
+          handled automatically without manual dtype reconciliation
+      - ignore_errors=false on train: malformed rows crash loudly so we
+        notice data quality issues early rather than silently losing rows
+      - ignore_errors=true on val/test: these files are provided by the
+        competition and we cannot fix them, so we degrade gracefully
 
-    Equivalent pandas approach would require manual dtype reconciliation
-    across 8 files with schema drift — DuckDB does this in one line.
+    NULL sentinels (\\N, NA, etc.) are replaced inline via CASE WHEN so
+    that downstream code never sees raw sentinel strings.
     """
     train_glob = str(raw_dir / TRAIN_GLOB)
     val_path   = str(raw_dir / VAL_FILE)
@@ -88,7 +92,7 @@ def bronze_ingest(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> None:
 
     col_sql = ",\n            ".join(sentinel_col(c) for c in cols)
 
-    # Train: glob all train-*.csv with union_by_name
+    # Train: glob all train-*.csv files with union_by_name
     con.execute(f"""
         CREATE OR REPLACE VIEW bronze_train AS
         SELECT
@@ -103,6 +107,7 @@ def bronze_ingest(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> None:
     n_train = con.execute("SELECT COUNT(*) FROM bronze_train").fetchone()[0]
     print(f"  bronze_train: {n_train} rows")
 
+    # Validation
     con.execute(f"""
         CREATE OR REPLACE VIEW bronze_val AS
         SELECT {col_sql}
@@ -111,6 +116,7 @@ def bronze_ingest(con: duckdb.DuckDBPyConnection, raw_dir: Path) -> None:
     n_val = con.execute("SELECT COUNT(*) FROM bronze_val").fetchone()[0]
     print(f"  bronze_val:   {n_val} rows")
 
+    # Test
     con.execute(f"""
         CREATE OR REPLACE VIEW bronze_test AS
         SELECT {col_sql}
@@ -134,9 +140,13 @@ def bronze_to_pandas(con: duckdb.DuckDBPyConnection,
 def normalize_accents(s: str) -> str:
     """
     Remove synthetically injected accent marks from titles.
-    NFD decompose → strip combining diacritical marks.
+    NFD decompose → strip combining diacritical marks (unicode category Mn).
     'Báttling Bútlér' → 'Battling Butler'
-    Works for any accent on any letter — no lookup table needed.
+
+    EDA finding: 1,280 rows (16.1%) have accent injection. This is a
+    synthetic corruption — it does not bias the label (pos rate is equal
+    for dirty vs clean titles). NFD decomposition handles any accent on
+    any letter without a lookup table.
     """
     if not isinstance(s, str):
         return s
@@ -146,8 +156,15 @@ def normalize_accents(s: str) -> str:
 
 def fix_year_swap(df: pd.DataFrame) -> pd.DataFrame:
     """
-    ~10% of rows have startYear=NULL but endYear holds the release year.
-    Detection is data-driven: startYear NULL AND endYear in plausible range.
+    Fix swapped startYear / endYear values.
+
+    EDA finding: 786 train rows (94 val, 120 test) have startYear=NULL
+    but endYear holds the actual release year. Detection is data-driven:
+    startYear is NULL AND endYear falls within the plausible range
+    [YEAR_MIN, YEAR_MAX]. No row indices are hardcoded.
+
+    Label rate for swapped rows: 47.7% vs 50.4% normal — leaving these
+    uncorrected would introduce a small systematic bias.
     """
     df = df.copy()
     sy = pd.to_numeric(df["startYear"], errors="coerce")
@@ -163,7 +180,10 @@ def fix_year_swap(df: pd.DataFrame) -> pd.DataFrame:
 
 def cast_numeric(df: pd.DataFrame, col: str,
                  lo=None, hi=None) -> pd.DataFrame:
-    """TRY_CAST equivalent: invalid → NULL, out-of-range → NULL."""
+    """
+    TRY_CAST equivalent: coerce invalid values to NULL, clip out-of-range
+    values to NULL. Thresholds come from config.py.
+    """
     df = df.copy()
     df[col] = pd.to_numeric(df[col], errors="coerce").astype("Float64")
     if lo is not None:
@@ -174,6 +194,15 @@ def cast_numeric(df: pd.DataFrame, col: str,
 
 
 def silver_clean(df: pd.DataFrame, has_label: bool) -> pd.DataFrame:
+    """
+    Full Silver cleaning pass. Applied to train, val, and test identically.
+    Order matters:
+      1. normalize_accents  — text fix before any comparisons
+      2. fix_year_swap      — structural fix before numeric casting
+      3. cast_numeric x4    — type coercion with range validation
+      4. label mapping      — string True/False → Int8 0/1
+      5. dedup on tconst    — safety net, no duplicates found in practice
+    """
     df = df.copy()
 
     if "primaryTitle" in df.columns:
@@ -197,6 +226,10 @@ def silver_clean(df: pd.DataFrame, has_label: bool) -> pd.DataFrame:
     if len(df) < n_before:
         print(f"    dedup: removed {n_before - len(df)} duplicate rows")
 
+    # Lock in original row order before DuckDB join scrambles it.
+    # The Gold SQL uses ORDER BY m._row_id to restore this order after joins.
+    df["_row_id"] = np.arange(len(df))
+
     return df
 
 
@@ -211,13 +244,25 @@ def gold_build(con: duckdb.DuckDBPyConnection,
                directing_df: pd.DataFrame,
                writing_df:   pd.DataFrame) -> tuple:
     """
-    Use DuckDB for Gold stage joins and aggregations.
+    Use DuckDB for the Gold stage: joins, aggregations, feature derivation.
 
     Why DuckDB here instead of pandas merge+groupby:
-      - Aggregation + join in a single SQL expression is more readable
-      - Hash-join optimiser is faster than pandas merge at scale
-      - Adding new aggregations is one SQL line
-      - Logic is transparent and auditable for the poster diagram
+      - COUNT DISTINCT GROUP BY is exactly what SQL is optimised for
+      - Hash-join optimiser outperforms pandas merge at scale
+      - All feature logic lives in one readable SQL expression per split
+      - Adding a new aggregation (e.g. avg rating per director) is one line
+      - The SQL is auditable and can be shown directly on the poster
+
+    Hook-created columns (is_long_film, is_old_film, is_blockbuster,
+    is_foreign_title, title_word_count, title_has_number) are passed
+    through from Silver via COALESCE(..., 0). If a hook is ever removed,
+    the COALESCE ensures the pipeline does not crash — it defaults to 0.
+
+    Features computed in Gold SQL:
+      log_numVotes   = LN(numVotes + 1)             smooths heavy right skew
+      len_primaryTitle = LENGTH(primaryTitle)        char count title signal
+      decade         = FLOOR(startYear/10)*10        era signal, less noisy
+                                                     than raw year
     """
     con.register("silver_train_df", silver_train)
     con.register("silver_val_df",   silver_val)
@@ -225,6 +270,7 @@ def gold_build(con: duckdb.DuckDBPyConnection,
     con.register("directing_df",    directing_df)
     con.register("writing_df",      writing_df)
 
+    # Crew aggregations — COUNT DISTINCT per movie
     con.execute("""
         CREATE OR REPLACE VIEW agg_directors AS
         SELECT tconst, COUNT(DISTINCT nconst) AS n_directors
@@ -245,22 +291,40 @@ def gold_build(con: duckdb.DuckDBPyConnection,
         label_col = f", CAST(m.{LABEL_COL} AS INTEGER) AS {LABEL_COL}" if include_label else ""
         return f"""
             SELECT
+                m._row_id,
                 m.tconst,
                 m.primaryTitle,
                 m.originalTitle,
-                CAST(m.startYear AS DOUBLE)             AS startYear,
-                CAST(m.runtimeMinutes AS DOUBLE)        AS runtimeMinutes,
-                CAST(m.numVotes AS DOUBLE)              AS numVotes
+                -- ── core numeric features ──
+                CAST(m.startYear AS DOUBLE)                          AS startYear,
+                CAST(m.runtimeMinutes AS DOUBLE)                     AS runtimeMinutes,
+                CAST(m.numVotes AS DOUBLE)                           AS numVotes
                 {label_col},
-                COALESCE(d.n_directors, 0)              AS n_directors,
-                COALESCE(w.n_writers,   0)              AS n_writers,
-                LN(CAST(m.numVotes AS DOUBLE) + 1)      AS log_numVotes,
-                LENGTH(m.primaryTitle)                  AS len_primaryTitle,
-                0                                       AS has_endYear,
-                FLOOR(CAST(m.startYear AS DOUBLE) / 10) * 10 AS decade
+                -- ── crew aggregates (from JSON relations) ──
+                COALESCE(d.n_directors, 0)                           AS n_directors,
+                COALESCE(w.n_writers,   0)                           AS n_writers,
+                -- ── derived numeric features ──
+                LN(CAST(m.numVotes AS DOUBLE) + 1)                   AS log_numVotes,
+                LENGTH(m.primaryTitle)                               AS len_primaryTitle,
+                FLOOR(CAST(m.startYear AS DOUBLE) / 10) * 10        AS decade,
+                -- ── pass-through: hook-created binary flags (v1) ──
+                -- is_long_film: runtimeMinutes > 300 — all 8 such films True (EDA)
+                COALESCE(CAST(m.is_long_film      AS INTEGER), 0)    AS is_long_film,
+                -- ── pass-through: hook-created binary flags (v2, EDA-driven) ──
+                -- is_old_film: pre-1930 films — 91.7% positive rate (survivorship bias)
+                COALESCE(CAST(m.is_old_film       AS INTEGER), 0)    AS is_old_film,
+                -- is_blockbuster: numVotes > 1M — 100% positive in train (20 films)
+                COALESCE(CAST(m.is_blockbuster    AS INTEGER), 0)    AS is_blockbuster,
+                -- is_foreign_title: primaryTitle != originalTitle (non-English origin)
+                COALESCE(CAST(m.is_foreign_title  AS INTEGER), 0)    AS is_foreign_title,
+                -- title_word_count: weak positive signal (r=+0.07)
+                COALESCE(CAST(m.title_word_count  AS INTEGER), 0)    AS title_word_count,
+                -- title_has_number: weak negative signal (r=-0.07, often sequels)
+                COALESCE(CAST(m.title_has_number  AS INTEGER), 0)    AS title_has_number
             FROM {source} m
             LEFT JOIN agg_directors d USING (tconst)
             LEFT JOIN agg_writers   w USING (tconst)
+            ORDER BY m._row_id
         """
 
     gold_train = con.execute(gold_sql("silver_train_df", include_label=True)).df()
@@ -275,6 +339,11 @@ def gold_build(con: duckdb.DuckDBPyConnection,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def profile_dataframe(df: pd.DataFrame, name: str, out_dir: Path) -> None:
+    """
+    Write a quality report CSV for one DataFrame.
+    Profiles are generated at Bronze, Silver, and Gold stages so the team
+    can show before/after evidence of each cleaning step on the poster.
+    """
     rows = []
     n = len(df)
     for col in df.columns:
@@ -308,61 +377,73 @@ def build(raw_dir: Path = RAW,
     processed_dir.mkdir(parents=True, exist_ok=True)
     profiles_dir.mkdir(parents=True, exist_ok=True)
 
-    con = duckdb.connect()  # in-memory DuckDB instance
+    con = duckdb.connect()  # in-memory DuckDB — no file on disk
 
+    # ── BRONZE: DuckDB ingestion ───────────────────────────────────────────────
     print("\n── BRONZE: Ingestion (DuckDB) ────────────────────────────────")
     bronze_ingest(con, raw_dir)
     bronze_train_df = bronze_to_pandas(con, "bronze_train")
     bronze_val_df   = bronze_to_pandas(con, "bronze_val")
     bronze_test_df  = bronze_to_pandas(con, "bronze_test")
 
+    # Checkpoint: raw ingested data (before any cleaning)
     bronze_train_df.to_csv(merged_dir / "train_features.csv", index=False)
     bronze_val_df.to_csv(  merged_dir / "val_features.csv",   index=False)
     bronze_test_df.to_csv( merged_dir / "test_features.csv",  index=False)
 
+    # ── JSON Relations ─────────────────────────────────────────────────────────
     print("\n── JSON Relations ────────────────────────────────────────────")
     directing_df = load_directing(raw_dir / DIRECTING_FILE)
     writing_df   = load_writing(raw_dir   / WRITING_FILE)
     print(f"  directing: {len(directing_df)} rows, {directing_df['tconst'].nunique()} movies")
     print(f"  writing:   {len(writing_df)} rows, {writing_df['tconst'].nunique()} movies")
 
+    # ── SILVER: pandas cleaning ────────────────────────────────────────────────
     print("\n── SILVER: Cleaning (pandas) ─────────────────────────────────")
     silver_train = silver_clean(bronze_train_df, has_label=True)
     silver_val   = silver_clean(bronze_val_df,   has_label=True)
     silver_test  = silver_clean(bronze_test_df,  has_label=False)
 
+    # ── Cleaning Hooks: EDA team injections ───────────────────────────────────
     print("\n── Cleaning Hooks (EDA injections) ───────────────────────────")
     silver_train = apply_cleaning_hooks(silver_train, "train")
     silver_val   = apply_cleaning_hooks(silver_val,   "val")
     silver_test  = apply_cleaning_hooks(silver_test,  "test")
 
+    # ── Quality Gates ──────────────────────────────────────────────────────────
     print("\n── Quality Gates ─────────────────────────────────────────────")
     run_all_gates(silver_train, "train")
     run_all_gates(silver_val,   "val")
     run_all_gates(silver_test,  "test")
 
+    # Checkpoint: cleaned data (after hooks, before Gold joins)
     silver_train.to_csv(cleaned_dir / "train_features.csv", index=False)
     silver_val.to_csv(  cleaned_dir / "val_features.csv",   index=False)
     silver_test.to_csv( cleaned_dir / "test_features.csv",  index=False)
 
+    # ── GOLD: DuckDB joins + feature computation ───────────────────────────────
     print("\n── GOLD: Features + Joins (DuckDB) ───────────────────────────")
     gold_train, gold_val, gold_test = gold_build(
         con, silver_train, silver_val, silver_test,
         directing_df, writing_df
     )
 
+    # ── Profiles: Bronze + Silver + Gold for all splits ───────────────────────
     print("\n── Profiles ──────────────────────────────────────────────────")
-    for df, name in [(bronze_train_df, "bronze_train"),
-                     (bronze_val_df,   "bronze_val"),
-                     (bronze_test_df,  "bronze_test"),
-                     (silver_train, "silver_train"),
-                     (silver_val,   "silver_val"),
-                     (silver_test,  "silver_test"),
-                     (gold_train, "gold_train"),
-                     (gold_val,   "gold_val"),
-                     (gold_test,  "gold_test")]:
+    for df, name in [
+        (bronze_train_df, "bronze_train"),
+        (bronze_val_df,   "bronze_val"),
+        (bronze_test_df,  "bronze_test"),
+        (silver_train,    "silver_train"),
+        (silver_val,      "silver_val"),
+        (silver_test,     "silver_test"),
+        (gold_train,      "gold_train"),
+        (gold_val,        "gold_val"),
+        (gold_test,       "gold_test"),
+    ]:
         profile_dataframe(df, name, profiles_dir)
 
+    # ── Export: final features for model ──────────────────────────────────────
     print("\n── Export ────────────────────────────────────────────────────")
     gold_train.to_csv(processed_dir / "train_features.csv", index=False)
     gold_val.to_csv(  processed_dir / "val_features.csv",   index=False)

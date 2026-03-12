@@ -14,14 +14,13 @@ Outputs:
     outputs/model_report.txt      ← accuracy + feature importances
 """
 
-from os import PathLike
 import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from config import CLEANED, MERGED, PROCESSED, LABEL_COL
+from config import PROCESSED, LABEL_COL
 
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
@@ -37,24 +36,37 @@ OUTPUTS.mkdir(parents=True, exist_ok=True)
 # ── Features to use ───────────────────────────────────────────────────────────
 # Add/remove features here as EDA findings come in.
 # Never include tconst, primaryTitle, originalTitle (non-numeric / identifiers).
+#
+# CHANGELOG
+# v1: baseline features
+# v2: added EDA-driven flags from cleaning_hooks.py v2
+#     removed has_endYear (always 0 after drop_endYear hook — zero variance)
 FEATURE_COLS = [
-    "startYear",
-    "runtimeMinutes",
-    "numVotes",
-    "log_numVotes",
-    "n_directors",
-    "n_writers",
-    "len_primaryTitle",
-    "has_endYear",
-    "is_long_film",
-    "decade",
+    # ── continuous features ──
+    "startYear",           # r = -0.26 with label
+    "runtimeMinutes",      # r = +0.30 — strongest continuous signal
+    "numVotes",            # raw vote count
+    "log_numVotes",        # r = +0.25 — log transform more informative than raw
+    "decade",              # era signal, less noisy than raw startYear
+    "len_primaryTitle",    # r = +0.07 — weak but free
+    # ── crew aggregates ──
+    "n_directors",         # r = +0.02
+    "n_writers",           # r = +0.04
+    # ── binary flags v1 ──
+    "is_long_film",        # runtime > 300 min — all 8 such films are True
+    # ── binary flags v2 (EDA-driven) ──
+    "is_old_film",         # pre-1930 — 91.7% positive rate (survivorship bias)
+    "is_blockbuster",      # numVotes > 1M — 100% positive in train (20 films)
+    "is_foreign_title",    # primaryTitle != originalTitle
+    "title_word_count",    # number of words in title
+    "title_has_number",    # digit in title (r = -0.07, often sequels)
 ]
 
 
-def load_data(stage: PathLike = PROCESSED):
-    train = pd.read_csv(stage / "train_features.csv")
-    val   = pd.read_csv(stage / "val_features.csv")
-    test  = pd.read_csv(stage / "test_features.csv")
+def load_data():
+    train = pd.read_csv(PROCESSED / "train_features.csv")
+    val   = pd.read_csv(PROCESSED / "val_features.csv")
+    test  = pd.read_csv(PROCESSED / "test_features.csv")
     return train, val, test
 
 
@@ -87,8 +99,11 @@ def predictions_to_file(preds: np.ndarray, path: Path) -> None:
     print(f"  Saved: {path.name}  ({len(preds)} predictions)")
 
 
-def run(train, val, test, short = False):
+def run():
     print("\n── Loading features ──────────────────────────────────────────")
+    train, val, test = load_data()
+
+    print("First 5 tconst in val (pipeline output):", val['tconst'].head().tolist()) #testing matching labels
 
     X_train, y_train, cols = get_xy(train, has_label=True)
     X_val,   y_val,   _    = get_xy(val,   has_label=False)
@@ -111,13 +126,13 @@ def run(train, val, test, short = False):
     }
 
     # ── Train + evaluate on train set (internal check) ────────────────────────
-    if not short: print("\n── Training & evaluating ─────────────────────────────────────")
+    print("\n── Training & evaluating ─────────────────────────────────────")
     results = {}
     for name, pipe in candidates.items():
         pipe.fit(X_train, y_train)
         train_acc = accuracy_score(y_train, pipe.predict(X_train))
         results[name] = {"pipe": pipe, "train_acc": train_acc}
-        if not short: print(f"  {name:<25} train_acc={train_acc:.4f}")
+        print(f"  {name:<25} train_acc={train_acc:.4f}")
 
     # ── Cross-validate to pick best model (realistic accuracy estimate) ────
     print("\n── Cross-validation (5-fold) ─────────────────────────────────")
@@ -132,8 +147,6 @@ def run(train, val, test, short = False):
     best_pipe = results[best_name]["pipe"]
     best_pipe.fit(X_train, y_train)   # refit on full train set
     print(f"\n  → Using: {best_name}  (cv_acc={results[best_name]['cv_mean']:.4f})")
-
-    if short: return
 
     # ── Generate predictions ───────────────────────────────────────────────────
     print("\n── Generating predictions ────────────────────────────────────")
@@ -178,9 +191,4 @@ def run(train, val, test, short = False):
 
 
 if __name__ == "__main__":
-    bronze_train, bronze_val, bronze_test = load_data(MERGED)
-    silver_train, silver_val, silver_test = load_data(CLEANED)
-    gold_train, gold_val, gold_test = load_data(PROCESSED)
-    run(bronze_train, bronze_val, bronze_test, True)
-    run(silver_train, silver_val, silver_test, True)
-    run(gold_train, gold_val, gold_test)
+    run()
