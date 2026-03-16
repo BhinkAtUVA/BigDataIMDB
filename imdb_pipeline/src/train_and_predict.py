@@ -28,6 +28,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 OUTPUTS = Path(__file__).resolve().parent.parent / "outputs"
@@ -121,7 +123,21 @@ def run():
             RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
         ),
         "Gradient Boosting": build_pipeline(
-            GradientBoostingClassifier(n_estimators=200, random_state=42)
+            GradientBoostingClassifier(
+                n_estimators=300, learning_rate=0.05, max_depth=5, random_state=42
+            )
+        ),
+        "XGBoost": build_pipeline(
+            XGBClassifier(
+                n_estimators=300, learning_rate=0.05, max_depth=5, random_state=42, 
+                eval_metric="logloss", use_label_encoder=False
+            )
+        ),
+        "LightGBM": build_pipeline(
+            LGBMClassifier(
+                n_estimators=300, learning_rate=0.05, max_depth=5, random_state=42,
+                verbose=-1
+            )
         ),
     }
 
