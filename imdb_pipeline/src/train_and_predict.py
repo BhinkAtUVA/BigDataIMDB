@@ -1,17 +1,13 @@
 """
 train_and_predict.py
-────────────────────
+--------------------
 Trains a classifier on the cleaned feature set, evaluates on validation,
 and writes submission-ready prediction files.
 
-Run:
-    cd imdb_pipeline
-    python src/train_and_predict.py
-
 Outputs:
-    outputs/predictions_val.txt   ← submit this for validation score
-    outputs/predictions_test.txt  ← submit this for test score
-    outputs/model_report.txt      ← accuracy + feature importances
+    outputs/predictions_val.txt   - for validation score
+    outputs/predictions_test.txt  - for test score
+    outputs/model_report.txt      - accuracy + feature importances
 """
 
 import sys
@@ -31,37 +27,30 @@ from sklearn.metrics import accuracy_score, classification_report
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# -- Paths -----------
 OUTPUTS = Path(__file__).resolve().parent.parent / "outputs"
 OUTPUTS.mkdir(parents=True, exist_ok=True)
 
-# ── Features to use ───────────────────────────────────────────────────────────
-# Add/remove features here as EDA findings come in.
-# Never include tconst, primaryTitle, originalTitle (non-numeric / identifiers).
-#
-# CHANGELOG
-# v1: baseline features
-# v2: added EDA-driven flags from cleaning_hooks.py v2
-#     removed has_endYear (always 0 after drop_endYear hook — zero variance)
+# -- Features to use -----------
 FEATURE_COLS = [
-    # ── continuous features ──
-    "startYear",           # r = -0.26 with label
-    "runtimeMinutes",      # r = +0.30 — strongest continuous signal
-    "numVotes",            # raw vote count
-    "log_numVotes",        # r = +0.25 — log transform more informative than raw
-    "decade",              # era signal, less noisy than raw startYear
-    "len_primaryTitle",    # r = +0.07 — weak but free
-    # ── crew aggregates ──
-    "n_directors",         # r = +0.02
-    "n_writers",           # r = +0.04
-    # ── binary flags v1 ──
-    "is_long_film",        # runtime > 300 min — all 8 such films are True
-    # ── binary flags v2 (EDA-driven) ──
-    "is_old_film",         # pre-1930 — 91.7% positive rate (survivorship bias)
-    "is_blockbuster",      # numVotes > 1M — 100% positive in train (20 films)
-    "is_foreign_title",    # primaryTitle != originalTitle
-    "title_word_count",    # number of words in title
-    "title_has_number",    # digit in title (r = -0.07, often sequels)
+    # continuous features 
+    "startYear",
+    "runtimeMinutes",
+    "numVotes",
+    "log_numVotes",
+    "decade",
+    "len_primaryTitle",
+    # crew aggregates 
+    "n_directors",
+    "n_writers",
+    # binary flags v1 
+    "is_long_film",
+    # binary flags v2 (EDA-driven)
+    "is_old_film",
+    "is_blockbuster",
+    "is_foreign_title",
+    "title_word_count",
+    "title_has_number",
 ]
 
 
@@ -73,7 +62,6 @@ def load_data():
 
 
 def get_xy(df: pd.DataFrame, has_label: bool):
-    # Only use columns that actually exist in the DataFrame
     cols = [c for c in FEATURE_COLS if c in df.columns]
     X = df[cols].copy()
     y = df[LABEL_COL].astype(int) if has_label else None
@@ -81,11 +69,8 @@ def get_xy(df: pd.DataFrame, has_label: bool):
 
 
 def build_pipeline(model) -> Pipeline:
-    """
-    Impute → Scale → Model.
-    Imputation handles any remaining NULLs (e.g. runtimeMinutes ~0.2% missing).
-    Scaling matters for logistic regression; harmless for tree models.
-    """
+    # Impute -> Scale -> Model.
+
     return Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler",  StandardScaler()),
@@ -94,7 +79,7 @@ def build_pipeline(model) -> Pipeline:
 
 
 def predictions_to_file(preds: np.ndarray, path: Path) -> None:
-    """Write predictions as True/False strings, one per line."""
+    # Write predictions as True/False strings, one per line.
     with open(path, "w") as f:
         for p in preds:
             f.write("True\n" if p == 1 else "False\n")
@@ -102,7 +87,7 @@ def predictions_to_file(preds: np.ndarray, path: Path) -> None:
 
 
 def run():
-    print("\n── Loading features ──────────────────────────────────────────")
+    print("\n-- Loading features --------")
     train, val, test = load_data()
 
     print("First 5 tconst in val (pipeline output):", val['tconst'].head().tolist()) #testing matching labels
@@ -114,7 +99,7 @@ def run():
     print(f"  Features used: {cols}")
     print(f"  Train: {len(X_train)} rows  |  Val: {len(X_val)} rows  |  Test: {len(X_test)} rows")
 
-    # ── Models to try ─────────────────────────────────────────────────────────
+    # -- Models to try --------
     candidates = {
         "Logistic Regression": build_pipeline(
             LogisticRegression(max_iter=1000, random_state=42)
@@ -141,8 +126,8 @@ def run():
         ),
     }
 
-    # ── Train + evaluate on train set (internal check) ────────────────────────
-    print("\n── Training & evaluating ─────────────────────────────────────")
+    # -- Train + evaluate on train set (internal check) --------
+    print("\n-- Training & evaluating ---------")
     results = {}
     for name, pipe in candidates.items():
         pipe.fit(X_train, y_train)
@@ -150,8 +135,8 @@ def run():
         results[name] = {"pipe": pipe, "train_acc": train_acc}
         print(f"  {name:<25} train_acc={train_acc:.4f}")
 
-    # ── Cross-validate to pick best model (realistic accuracy estimate) ────
-    print("\n── Cross-validation (5-fold) ─────────────────────────────────")
+    # -- Cross-validate to pick best model (realistic accuracy estimate) --------
+    print("\n-- Cross-validation (5-fold) ---------")
     from sklearn.model_selection import cross_val_score
     for name, res in results.items():
         cv_scores = cross_val_score(res["pipe"], X_train, y_train, cv=5, scoring="accuracy")
@@ -162,18 +147,18 @@ def run():
     best_name = max(results, key=lambda k: results[k]["cv_mean"])
     best_pipe = results[best_name]["pipe"]
     best_pipe.fit(X_train, y_train)   # refit on full train set
-    print(f"\n  → Using: {best_name}  (cv_acc={results[best_name]['cv_mean']:.4f})")
+    print(f"\n  -> Using: {best_name}  (cv_acc={results[best_name]['cv_mean']:.4f})")
 
-    # ── Generate predictions ───────────────────────────────────────────────────
-    print("\n── Generating predictions ────────────────────────────────────")
+    # -- Generate predictions ---------
+    print("\n-- Generating predictions ---------")
     val_preds  = best_pipe.predict(X_val)
     test_preds = best_pipe.predict(X_test)
 
     predictions_to_file(val_preds,  OUTPUTS / "predictions_val.txt")
     predictions_to_file(test_preds, OUTPUTS / "predictions_test.txt")
 
-    # ── Feature importances (for poster / analysis) ────────────────────────────
-    print("\n── Feature importances ───────────────────────────────────────")
+    # -- Feature importances (for poster / analysis) ---------
+    print("\n-- Feature importances ---------")
     model = best_pipe.named_steps["model"]
     report_lines = [
         f"Best model: {best_name}",
@@ -195,7 +180,7 @@ def run():
             print(line)
             report_lines.append(line)
 
-    # ── Save report ────────────────────────────────────────────────────────────
+    # -- Save report ---------
     report_path = OUTPUTS / "model_report.txt"
     with open(report_path, "w") as f:
         f.write("\n".join(report_lines))

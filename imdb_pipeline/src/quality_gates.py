@@ -1,11 +1,3 @@
-"""
-quality_gates.py
-────────────────
-Each gate is a function that takes a DataFrame and raises a
-RuntimeError with a clear message if something critical is wrong.
-Add new gates freely — build() will call run_all_gates().
-"""
-
 import pandas as pd
 from config import REQUIRED_COLS, LABEL_COL, YEAR_MIN, YEAR_MAX
 
@@ -59,10 +51,10 @@ def gate_year_range(df: pd.DataFrame, split: str) -> None:
 
 
 def run_all_gates(df: pd.DataFrame, split: str) -> None:
-    """Run all gates in order. Stops at first failure."""
+    # Run all gates in order. Stops at first failure.
     gate_required_columns(df, split)
     gate_tconst_not_null(df, split)
     gate_tconst_unique(df, split)
     gate_label_values(df, split)
     gate_year_range(df, split)
-    print(f"  ✓ All quality gates passed for [{split}]")
+    print(f"All quality gates passed for [{split}]")
