@@ -1,8 +1,8 @@
 split,column,n_rows,n_missing,pct_missing,n_unique,dtype
 gold_val,_row_id,955,0,0.0,955,int64
-gold_val,tconst,955,0,0.0,955,object
-gold_val,primaryTitle,955,0,0.0,955,object
-gold_val,originalTitle,955,468,49.01,487,object
+gold_val,tconst,955,0,0.0,955,str
+gold_val,primaryTitle,955,0,0.0,955,str
+gold_val,originalTitle,955,468,49.01,487,str
 gold_val,startYear,955,0,0.0,98,float64
 gold_val,runtimeMinutes,955,0,0.0,123,float64
 gold_val,numVotes,955,0,0.0,820,float64

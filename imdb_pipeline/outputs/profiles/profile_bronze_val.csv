@@ -1,8 +1,8 @@
 split,column,n_rows,n_missing,pct_missing,n_unique,dtype
-bronze_val,tconst,955,0,0.0,955,object
-bronze_val,primaryTitle,955,0,0.0,955,object
-bronze_val,originalTitle,955,468,49.01,487,object
-bronze_val,startYear,955,94,9.84,98,object
-bronze_val,endYear,955,861,90.16,48,object
-bronze_val,runtimeMinutes,955,2,0.21,123,object
-bronze_val,numVotes,955,91,9.53,819,object
+bronze_val,tconst,955,0,0.0,955,str
+bronze_val,primaryTitle,955,0,0.0,955,str
+bronze_val,originalTitle,955,468,49.01,487,str
+bronze_val,startYear,955,94,9.84,98,str
+bronze_val,endYear,955,861,90.16,48,str
+bronze_val,runtimeMinutes,955,2,0.21,123,str
+bronze_val,numVotes,955,91,9.53,819,str

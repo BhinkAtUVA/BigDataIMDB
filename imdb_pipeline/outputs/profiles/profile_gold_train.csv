@@ -1,8 +1,8 @@
 split,column,n_rows,n_missing,pct_missing,n_unique,dtype
 gold_train,_row_id,7959,0,0.0,7959,int64
-gold_train,tconst,7959,0,0.0,7959,object
-gold_train,primaryTitle,7959,0,0.0,7816,object
-gold_train,originalTitle,7959,3988,50.11,3944,object
+gold_train,tconst,7959,0,0.0,7959,str
+gold_train,primaryTitle,7959,0,0.0,7816,str
+gold_train,originalTitle,7959,3988,50.11,3944,str
 gold_train,startYear,7959,0,0.0,104,float64
 gold_train,runtimeMinutes,7959,0,0.0,185,float64
 gold_train,numVotes,7959,0,0.0,5118,float64

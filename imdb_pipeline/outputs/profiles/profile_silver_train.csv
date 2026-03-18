@@ -1,7 +1,7 @@
 split,column,n_rows,n_missing,pct_missing,n_unique,dtype
-silver_train,tconst,7959,0,0.0,7959,object
-silver_train,primaryTitle,7959,0,0.0,7816,object
-silver_train,originalTitle,7959,3988,50.11,3944,object
+silver_train,tconst,7959,0,0.0,7959,str
+silver_train,primaryTitle,7959,0,0.0,7816,str
+silver_train,originalTitle,7959,3988,50.11,3944,str
 silver_train,startYear,7959,0,0.0,104,Float64
 silver_train,runtimeMinutes,7959,0,0.0,185,Float64
 silver_train,numVotes,7959,0,0.0,5118,Float64

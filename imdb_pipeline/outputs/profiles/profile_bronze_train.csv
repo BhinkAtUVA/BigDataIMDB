@@ -1,9 +1,9 @@
 split,column,n_rows,n_missing,pct_missing,n_unique,dtype
-bronze_train,tconst,7959,0,0.0,7959,object
-bronze_train,primaryTitle,7959,0,0.0,7846,object
-bronze_train,originalTitle,7959,3988,50.11,3944,object
-bronze_train,startYear,7959,786,9.88,104,object
-bronze_train,endYear,7959,7173,90.12,92,object
-bronze_train,runtimeMinutes,7959,13,0.16,185,object
-bronze_train,numVotes,7959,790,9.93,5118,object
+bronze_train,tconst,7959,0,0.0,7959,str
+bronze_train,primaryTitle,7959,0,0.0,7846,str
+bronze_train,originalTitle,7959,3988,50.11,3944,str
+bronze_train,startYear,7959,786,9.88,104,str
+bronze_train,endYear,7959,7173,90.12,92,str
+bronze_train,runtimeMinutes,7959,13,0.16,185,str
+bronze_train,numVotes,7959,790,9.93,5118,str
 bronze_train,label,7959,0,0.0,2,bool
